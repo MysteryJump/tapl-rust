@@ -71,6 +71,7 @@ pub fn start() {
     }
 }
 
+// big step style
 fn execute(ast: &Ast) -> Result<ExecutionResult, &'static str> {
     match ast {
         Ast::False => Ok(ExecutionResult::Boolean(false)),
@@ -92,13 +93,8 @@ fn execute(ast: &Ast) -> Result<ExecutionResult, &'static str> {
         Ast::IsZero(child) => {
             let ans = execute(child.as_ref())?;
             match ans {
-                ExecutionResult::Number(n) => {
-                    if n == 0 {
-                        Ok(ExecutionResult::Boolean(true))
-                    } else {
-                        Ok(ExecutionResult::Boolean(false))
-                    }
-                }
+                ExecutionResult::Number(0) => Ok(ExecutionResult::Boolean(true)),
+                ExecutionResult::Number(_) => Ok(ExecutionResult::Boolean(false)),
                 ExecutionResult::Boolean(_) => Err("Type Error"),
             }
         }
@@ -106,13 +102,8 @@ fn execute(ast: &Ast) -> Result<ExecutionResult, &'static str> {
             let condition_ans = execute(condition.as_ref())?;
             match condition_ans {
                 ExecutionResult::Number(_) => Err("Type error"),
-                ExecutionResult::Boolean(b) => {
-                    if b {
-                        execute(first.as_ref())
-                    } else {
-                        execute(second.as_ref())
-                    }
-                }
+                ExecutionResult::Boolean(true) => execute(first.as_ref()),
+                ExecutionResult::Boolean(false) => execute(second.as_ref()),
             }
         }
     }
@@ -174,7 +165,7 @@ fn parse_if_then_else(vec: &mut Vec<LexicalItem>) -> Result<Ast, String> {
 
 fn parse_unary(vec: &mut Vec<LexicalItem>) -> Result<Ast, String> {
     let first = vec.pop();
-    if let None = first {
+    if first.is_none() {
         Err(String::from("invalid token"))
     } else if let Some(t) = first {
         match t {

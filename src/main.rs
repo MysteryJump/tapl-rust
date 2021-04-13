@@ -1,7 +1,8 @@
 use chapter3::start;
 
 mod chapter3;
+// mod chapter7;
 
 fn main() {
-    start();
+    chapter3::start();
 }
