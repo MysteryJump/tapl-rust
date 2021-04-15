@@ -1,6 +1,12 @@
 use std::io::{stdin, Write};
 
-// 型無し算術式（でも型検査してる😂）
+use inkwell::{
+    builder::Builder,
+    context::Context,
+    module::Module,
+    passes::PassManager,
+    values::{FunctionValue, IntValue},
+};
 
 enum Ast {
     True,
@@ -44,6 +50,7 @@ impl std::fmt::Display for ExecutionResult {
     }
 }
 
+// sample if ( iszero 0 ) then if ( ( iszero succ succ 0 ) then ( 0 ) else ( pred pred succ 0 ) ) else 0 == -1
 pub fn start() {
     let mut line = String::new();
     loop {
@@ -58,6 +65,7 @@ pub fn start() {
                 match parse(&mut vec) {
                     Ok(ast) => match execute(&ast) {
                         Ok(result) => {
+                            compiler_fn(&ast).unwrap();
                             println!("{}", result);
                         }
                         Err(err) => println!("{}", err),
@@ -107,6 +115,130 @@ fn execute(ast: &Ast) -> Result<ExecutionResult, &'static str> {
             }
         }
     }
+}
+
+fn compiler_fn(ast: &Ast) -> Result<(), &'static str> {
+    let context = Context::create();
+    let builder = context.create_builder();
+    let module = context.create_module("repl");
+
+    let fpm = PassManager::create(&module);
+
+    fpm.add_instruction_combining_pass();
+    fpm.add_reassociate_pass();
+    fpm.add_gvn_pass();
+    fpm.add_cfg_simplification_pass();
+    fpm.add_basic_alias_analysis_pass();
+    fpm.add_promote_memory_to_register_pass();
+    fpm.add_instruction_combining_pass();
+    fpm.add_reassociate_pass();
+
+    fpm.initialize();
+
+    let ty = match execute(ast).unwrap() {
+        ExecutionResult::Number(_) => context.i64_type(),
+        ExecutionResult::Boolean(_) => context.bool_type(),
+    };
+
+    let fn_type = ty.fn_type(&[], false);
+    let fn_val = module.add_function(
+        &format!("anon_func_{}", rand::random::<u64>()),
+        fn_type,
+        None,
+    );
+
+    let entry = context.append_basic_block(fn_val, "entry");
+    builder.position_at_end(entry);
+    let expr = compile_expr(&context, &module, &builder, &fn_val, ast)?;
+    builder.build_return(Some(&expr));
+
+    if fn_val.verify(true) {
+        fpm.run_on(&fn_val);
+        fn_val.print_to_stderr();
+        Ok(())
+    } else {
+        Err("Caused unknown error")
+    }
+}
+
+fn compile_expr<'ctx>(
+    context: &'ctx Context,
+    module: &'ctx Module,
+    builder: &'ctx Builder,
+    func: &'ctx FunctionValue,
+    ast: &Ast,
+) -> Result<IntValue<'ctx>, &'static str> {
+    let i = match ast {
+        Ast::True => context.bool_type().const_int(1, true),
+        Ast::False => context.bool_type().const_int(0, true),
+        Ast::Conditional(cond, t, f) => match execute(cond).unwrap() {
+            ExecutionResult::Number(_) => panic!("Type Error!"),
+            ExecutionResult::Boolean(_) => {
+                let cond = compile_expr(context, module, builder, func, cond)?;
+                let cond = builder.build_int_compare(
+                    inkwell::IntPredicate::EQ,
+                    cond,
+                    context.bool_type().const_int(1, true),
+                    "ifcond",
+                );
+
+                let t_ty = match execute(t).unwrap() {
+                    ExecutionResult::Number(_) => context.i64_type(),
+                    ExecutionResult::Boolean(_) => context.bool_type(),
+                };
+
+                let then_bb = context.append_basic_block(*func, "if_then");
+                let else_bb = context.append_basic_block(*func, "if_else");
+                let cont_bb = context.append_basic_block(*func, "if_cont");
+
+                builder.build_conditional_branch(cond, then_bb, else_bb);
+
+                builder.position_at_end(then_bb);
+                let then_val = compile_expr(context, module, builder, func, t)?;
+                builder.build_unconditional_branch(cont_bb);
+                let then_bb = builder.get_insert_block().unwrap();
+
+                builder.position_at_end(else_bb);
+                let else_val = compile_expr(context, module, builder, func, f)?;
+                builder.build_unconditional_branch(cont_bb);
+                let else_bb = builder.get_insert_block().unwrap();
+
+                builder.position_at_end(cont_bb);
+                let phi = builder.build_phi(t_ty, "if_tmp");
+                phi.add_incoming(&[(&then_val, then_bb), (&else_val, else_bb)]);
+                phi.as_basic_value().into_int_value()
+            }
+        },
+        Ast::Zero => context.i64_type().const_int(0, true),
+        Ast::Succ(l) => {
+            let l = compile_expr(context, module, builder, func, l)?;
+            let r = rand::random::<u64>();
+            builder.build_int_add(
+                l,
+                context.i64_type().const_int(1, true),
+                &format!("add_rand_{}", r),
+            )
+        }
+        Ast::Pred(l) => {
+            let l = compile_expr(context, module, builder, func, l)?;
+            let r = rand::random::<u64>();
+            builder.build_int_sub(
+                l,
+                context.i64_type().const_int(1, true),
+                &format!("sub_rand_{}", r),
+            )
+        }
+        Ast::IsZero(a) => {
+            let r = rand::random::<u64>();
+            builder.build_int_compare(
+                inkwell::IntPredicate::EQ,
+                compile_expr(context, module, builder, func, a)?,
+                context.i64_type().const_int(0, true),
+                &format!("is_zero_{}", r),
+            )
+        }
+    };
+    Ok(i)
 }
 
 fn parse(vec: &mut Vec<LexicalItem>) -> Result<Ast, String> {
@@ -199,6 +331,7 @@ fn lex(input: &str) -> Result<Vec<LexicalItem>, String> {
             "succ" => items.push(LexicalItem::Succ),
             "pred" => items.push(LexicalItem::Pred),
             "iszero" => items.push(LexicalItem::IsZero),
+            "(" | ")" => {}
             _ => return Err(format!("Invalid token:{}", atom)),
         }
     }

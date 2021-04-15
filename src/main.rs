@@ -1,5 +1,3 @@
-use chapter3::start;
-
 mod chapter3;
 // mod chapter7;
 
