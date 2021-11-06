@@ -2,15 +2,14 @@ use std::io::{stdin, stdout, Write};
 
 pub fn start() {
     let mut line = String::new();
-    let t = 43u64;
-    let s = std::ptr::addr_of!(t);
     loop {
         print!(">>> ");
         stdout().flush().unwrap();
         stdin().read_line(&mut line).unwrap();
-        match lex(&line) {
+        match lex(line.trim_end()) {
             Ok(vec) => {
                 println!("{:?}", &vec);
+                parse(vec);
             }
             Err(err) => println!("{}", err),
         }
@@ -24,6 +23,13 @@ enum LexicalItem {
     RightParen,
     Dot,
     Identifier(String),
+}
+
+#[derive(Debug)]
+enum Term {
+    Variable(i32),
+    Abstraction(Box<Term>),
+    Apply(Box<Term>, Box<Term>),
 }
 
 fn lex(input: &str) -> Result<Vec<LexicalItem>, &str> {
@@ -72,3 +78,5 @@ fn lex(input: &str) -> Result<Vec<LexicalItem>, &str> {
 
     Ok(tokens)
 }
+
+fn parse(token_stream: Vec<LexicalItem>) {}
